@@ -133,7 +133,8 @@ describe.skipIf(!support.supported)("heartbeat queue database wiring", () => {
     const [reviewer] = await db.insert(agents).values({ companyId: company.id, name: "Reviewer", role: "qa", status: "idle", adapterType: "process", adapterConfig: {} }).returning();
     await db.update(issues).set({ assigneeAgentId: reviewer.id, status: "in_review" }).where(eq(issues.id, issue.id));
     const [wake] = await db.insert(agentWakeupRequests).values({ companyId: company.id, agentId: reviewer.id,
-      source: "assignment", reason: "issue_execution_deferred", status: "deferred_issue_execution", payload: { issueId: issue.id },
+      source: "assignment", reason: "issue_execution_deferred", status: "deferred_issue_execution",
+      payload: { issueId: issue.id, _paperclipWakeContext: { issueId: issue.id, taskId: issue.id } },
     }).returning();
     const [lease] = await db.insert(environmentLeases).values({ companyId: company.id, issueId: issue.id,
       heartbeatRunId: run.id, status: "pending_cleanup", cleanupStatus: "pending",
