@@ -2594,3 +2594,7 @@ Company-managed [Prompt Injection Prevention](prompt-injection-prevention.md)
 optionally classifies existing tool-result boundaries through a shared OpenRouter
 connection. Settings → Connections is permanent; valid model verdicts take
 precedence and dependency failures use the original built-in detector.
+
+### Legacy execution cleanup and deferred handoffs
+
+After a terminal legacy execution finishes releasing its controller and environment resources, queue recovery must reconsider deferred wakes for the same company and issue, including a wake for the next signoff participant. Recovery uses the existing issue-lock release and admission path; it must preserve current assignment, pause/Stop, budget, cleanup and company-isolation checks. A terminal status alone does not authorize successor execution before cleanup.

@@ -38,6 +38,19 @@ describe("heartbeat queue module boundary", () => {
     expect(deps.executeRun).not.toHaveBeenCalled();
   });
 
+  it.each(["running", "native", "missing_issue"])("does not recover %s executions through legacy cleanup", async kind => {
+    const database = guardedDatabase();
+    const deps = callbacks(database.db);
+    await createHeartbeatQueue(database.db, deps).resumeDeferredIssueWakesAfterCleanup({
+      id: "source", companyId: "company", agentId: "actor",
+      runtimeMode: kind === "native" ? "native" : "legacy",
+      status: kind === "running" ? "running" : "succeeded",
+      contextSnapshot: kind === "missing_issue" ? {} : { issueId: "issue" },
+    } as Parameters<ReturnType<typeof createHeartbeatQueue>["resumeDeferredIssueWakesAfterCleanup"]>[0]);
+    expect(database.access).not.toHaveBeenCalled();
+    expect(deps.releaseIssueExecutionAndPromote).not.toHaveBeenCalled();
+  });
+
   it("tracks pending wakes across instances and clears each rejected wake", async () => {
     const database = guardedDatabase();
     const deps = callbacks(database.db);
@@ -112,6 +125,32 @@ describe.skipIf(!support.supported)("heartbeat queue database wiring", () => {
     }).returning();
     return { ...seeded, recipient, pending };
   }
+
+  it("reconsiders a next-agent handoff after legacy cleanup", async () => {
+    const { company, issue, run } = await fixture("succeeded");
+    const [reviewer] = await db.insert(agents).values({ companyId: company.id, name: "Reviewer", role: "qa", status: "idle", adapterType: "process", adapterConfig: {} }).returning();
+    await db.update(issues).set({ assigneeAgentId: reviewer.id, status: "in_review" }).where(eq(issues.id, issue.id));
+    await db.insert(agentWakeupRequests).values({ companyId: company.id, agentId: reviewer.id,
+      source: "assignment", reason: "issue_execution_deferred", status: "deferred_issue_execution", payload: { issueId: issue.id },
+    });
+    const deps = callbacks(db);
+    await createHeartbeatQueue(db, deps).resumeDeferredIssueWakesAfterCleanup({ ...run, runtimeMode: "legacy" });
+    expect(deps.releaseIssueExecutionAndPromote).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ id: run.id }), { suppressImmediateRecovery: true, resumeStrandedQueue: true },
+    );
+    expect(deps.resumeQueuedCommentInterrupt).not.toHaveBeenCalled();
+  });
+
+  it("does not recover another issue's deferred wake after cleanup", async () => {
+    const { company, agent, run } = await fixture("succeeded");
+    const [other] = await db.insert(issues).values({ companyId: company.id, title: "Other task", status: "todo", assigneeAgentId: agent.id }).returning();
+    await db.insert(agentWakeupRequests).values({ companyId: company.id, agentId: agent.id,
+      source: "assignment", reason: "issue_execution_deferred", status: "deferred_issue_execution", payload: { issueId: other.id },
+    });
+    const deps = callbacks(db);
+    await createHeartbeatQueue(db, deps).resumeDeferredIssueWakesAfterCleanup({ ...run, runtimeMode: "legacy" });
+    expect(deps.releaseIssueExecutionAndPromote).not.toHaveBeenCalled();
+  });
 
   it("rechecks a handoff's assignment version under the issue claim lock", async () => {
     const { company, agent, issue, wake, run } = await fixture("queued");
