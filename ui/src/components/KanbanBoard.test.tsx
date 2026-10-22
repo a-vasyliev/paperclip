@@ -252,18 +252,21 @@ describe("KanbanBoard", () => {
     expect(resolveKanbanTargetStatus("missing", issues)).toBeNull();
   });
 
-  it.each([false, true])("shows project badges with compactCards=%s", (compactCards) => {
-    const issue = { ...createIssue(1, "todo"), projectId: "project-1" };
-    const { container, render } = renderBoard({ issues: [issue], projectById, showProjects: true, compactCards });
+  it.each([[false, false], [false, true], [true, false], [true, true]])(
+    "shows project badges with compactCards=%s and overflow fades=%s",
+    (compactCards, showOverflowFades) => {
+      const issue = { ...createIssue(1, "todo"), projectId: "project-1" };
+      const { container, render } = renderBoard({ issues: [issue], projectById, showProjects: true, compactCards, showOverflowFades });
 
-    const badge = container.querySelector('[title="Commerce platform"]');
-    expect(badge?.textContent).toBe("Commerce platform");
-    expect(badge?.querySelector<HTMLElement>('[aria-hidden="true"]')?.style.backgroundColor).toBe("royalblue");
-    expect(container.querySelector('a[href="/issues/PAP-1"]')?.contains(badge)).toBe(true);
+      const badge = container.querySelector('[title="Commerce platform"]');
+      expect(badge?.textContent).toBe("Commerce platform");
+      expect(badge?.querySelector<HTMLElement>('[aria-hidden="true"]')?.style.backgroundColor).toBe("royalblue");
+      expect(container.querySelector('a[href="/issues/PAP-1"]')?.contains(badge)).toBe(true);
 
-    render({ issues: [issue], projectById, showProjects: false, compactCards });
-    expect(container.textContent).not.toContain("Commerce platform");
-  });
+      render({ issues: [issue], projectById, showProjects: false, compactCards, showOverflowFades });
+      expect(container.textContent).not.toContain("Commerce platform");
+    },
+  );
 
   it("omits badges for unset or unknown projects and when visibility is not enabled", () => {
     const issues = [createIssue(1, "todo"), { ...createIssue(2, "todo"), projectId: "unknown" }];
