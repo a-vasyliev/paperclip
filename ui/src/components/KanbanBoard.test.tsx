@@ -106,10 +106,11 @@ function renderBoard(
 }
 
 describe("KanbanBoard", () => {
-  it("shows the full total independently of the loaded card page", () => {
+  it.each([false, true])("shows the full total with overflow fades=%s", (showOverflowFades) => {
     const { container } = renderBoard({
       issues: createIssues(200, "done"),
       columnCounts: { done: 258 },
+      showOverflowFades,
       initialVisibleCount: 10,
     });
     expect(container.textContent).toContain("Showing 10 of 258");
