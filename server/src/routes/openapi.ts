@@ -67,6 +67,7 @@ import {
   resetAgentSessionSchema,
   agentSkillSyncSchema,
   testAdapterEnvironmentSchema,
+  qualifyAgentRunnerSchema,
   // Issue
   createIssueSchema,
   setIssueTitleSchema,
@@ -1389,6 +1390,7 @@ const browserUseOperations = [
 ] as const;
 
 const BOARD_ONLY_OPERATIONS = new Set([
+  "POST /api/issues/{id}/interactions/{interactionId}/dismiss",
   "POST /api/issues/{id}/retry",
   "GET /api/companies/{companyId}/prompt-injection-prevention",
   "PUT /api/companies/{companyId}/prompt-injection-prevention",
@@ -4127,6 +4129,16 @@ registry.registerPath({
     body: jsonBody(testAdapterEnvironmentSchema),
   },
   responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/agents/{id}/qualify-runner",
+  tags: ["agents"],
+  summary: "Qualify an existing agent's saved computer for a runner upgrade",
+  description: "Requires agent_config:update authorization, normally agents:configure. Resolves the saved agent's effective sandbox; expectedEnvironmentId only guards against stale UI state. Does not change the agent or grant instance environment access.",
+  request: { params: z.object({ id: z.string() }), body: jsonBody(qualifyAgentRunnerSchema) },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict, 422: r.unprocessable },
 });
 
 registry.registerPath({
@@ -10778,6 +10790,13 @@ registerCurrentRoute({
   tags: ["issues"],
   summary: "Cancel an issue question interaction",
   body: cancelIssueThreadInteractionSchema,
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/issues/{id}/interactions/{interactionId}/dismiss",
+  tags: ["issues"],
+  summary: "Defer a request to conversation history (human board users only)",
 });
 
 registerCurrentRoute({

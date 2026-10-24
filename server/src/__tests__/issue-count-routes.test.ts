@@ -42,6 +42,10 @@ describeEmbeddedPostgres("issue totals without card pagination", () => {
       const counted = await request(app).get(`${path}/count`).query(query).expect(200);
       expect(counted.body.count).toBe(listed.body.length);
     }
+    for (const name of ["participantAgentId", "projectId", "workspaceId", "executionWorkspaceId", "parentId", "parentIssueId", "descendantOf", "createdFromIssueId", "labelId"]) {
+      const invalid = await request(app).get(`${path}/count`).query({ [name]: "not-a-uuid" }).expect(422);
+      expect(invalid.body.error).toBe(`${name} must be a UUID`);
+    }
     await request(app).get(`${path}/count`).query({ updatedSince: "invalid" }).expect(400);
     await request(app).get(`${path}/count`).query({ status: "done", limit: 200 }).expect(400);
     await request(app).get(`${path}/count`).query({ attention: "invalid" }).expect(400);

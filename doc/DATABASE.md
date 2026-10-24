@@ -49,6 +49,25 @@ and leaves all existing cases passive. Source identities are not grants.
 
 ### Task query performance
 
+The issue-lock adapter's release read omits `result_json.stdout` and
+`result_json.stderr` before transferring a run to the controller. Every other result key, context field, and
+stop, retry, lease, and workspace-recovery check stays intact. Full output remains
+stored for execution history and detail reads. Terminal telemetry loads only its
+run identity, timestamps, usage, and typed task identifier.
+
+Recovery's latest-run queries return the context fields used by recovery
+decisions. Prompts, execution continuation bodies, and workspace setup payloads
+remain in the stored run and its full detail reads. These queries also return
+the PostgreSQL row version. Native blocked-wait repair compares that version
+against a fresh full source read before applying changes. Any intervening row
+update, including an edit outside the projection, defers repair to a fresh sweep.
+
+Execution-blocker reads select process, lifecycle, and task-binding fields rather
+than full execution rows. Context retains typed task and pre-dispatch evidence;
+Runner profiles retain the adapter type and complete native execution input and
+workspace-sync receipts. Full result evidence stays available to the existing
+retry and workspace checks. Stored context, profiles, and output are unchanged.
+
 Run-context lookups use expression indexes for both `context_snapshot.issueId`
 and `context_snapshot.paperclipIssue.id`. Task creation provenance has its own
 company-scoped expression index that follows the query's native issue ID and
@@ -97,7 +116,22 @@ The initial agent JWT run lookup reads only the cancellation state and
 conversation flag from saved run JSON. It does not transfer the full context or
 result. Run status, responsible-user identity, company and agent boundaries,
 and the cancellation response remain unchanged. Later identity refreshes keep
-their existing transaction and data reads.
+their current authorization and transaction boundaries.
+
+Chat recovery ancestry selects task identifiers and source-run links instead
+of full execution payloads. Instruction authorization selects current identity
+fields and still rechecks accepted identity, key revocation, and membership.
+Identity task locks and activation receipts project typed legacy task keys with
+the native and first-class issue IDs. These projections preserve task binding
+precedence and validation without transferring prompts or output.
+
+Recovery's latest-run and legacy-continuation eligibility reads select structured
+result fields for error families,
+workspace/configuration receipts, cancellation attribution, retry deadlines, and
+conversation finalization. The `adapter_failed`, `provider_quota`, and
+`configuration_incomplete` classifiers retain full results because they inspect
+arbitrary provider error text. Stored results and execution/detail reads remain
+complete; no recovery decision is cached.
 
 To measure authentication query responses on disposable synthetic data:
 
@@ -1121,3 +1155,12 @@ identity references. Budget reservations have a distinct classifier invocation
 source, and cost events accept `prompt_injection`. Unknown charges retain their
 holds through agent deletion attempts and settle through billing correction.
 See [service behavior](prompt-injection-prevention.md).
+
+### Deferred conversation requests
+
+`issue_thread_interactions.dismissed_at` and `dismissed_by_user_id` record a
+human's decision to leave a pending request in history. They are independent of
+`status`, `result`, and `resolved_at`: dismissal is neither an answer nor approval.
+The board-only dismissal path locks the task then interaction, checks audience,
+and never enqueues a continuation. Ordinary deferred requests are excluded from
+completion arbitration; protected authorization gates remain active.
