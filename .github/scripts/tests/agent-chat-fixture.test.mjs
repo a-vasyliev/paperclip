@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-const fixture = fileURLToPath(new URL("./agent-chat.mjs", import.meta.url));
+const fixture = fileURLToPath(new URL("../../../tests/e2e/fixtures/agent-chat.mjs", import.meta.url));
 
 for (const wakeReason of ["issue_continuation_needed", "chat_task_completed", "issue_commented"]) {
   test(`chat fixture handles ${wakeReason} without replaying a plan on system wakes`, async () => {
