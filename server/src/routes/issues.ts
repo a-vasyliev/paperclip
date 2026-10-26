@@ -8751,6 +8751,10 @@ export function issueRoutes(
       res.status(400).json({ error: "creation visibility flags must be true or false when provided" });
       return;
     }
+    if (includeParticipatedTasks && (req.actor.type !== "board" || !req.actor.userId)) {
+      res.status(403).json({ error: "includeParticipatedTasks requires board authentication" });
+      return;
+    }
 
     const userFilters: Record<string, string | undefined> = {};
     for (const name of ["assigneeUserId", "touchedByUserId", "inboxArchivedByUserId", "unreadForUserId"] as const) {

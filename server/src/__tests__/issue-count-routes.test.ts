@@ -50,4 +50,13 @@ describeEmbeddedPostgres("issue totals without card pagination", () => {
     await request(app).get(`${path}/count`).query({ status: "done", limit: 200 }).expect(400);
     await request(app).get(`${path}/count`).query({ attention: "invalid" }).expect(400);
   });
+
+  it("rejects participation scope from an agent exactly like the list route", async () => {
+    const a = await seedCompanyWithBoardAccess(ctx.db, "Agent count owner");
+    const agentApp = routeApp(ctx.db, { type: "agent", source: "agent_key", agentId: randomUUID(), companyId: a.companyId } as never, issueRoutes);
+    const path = `/api/companies/${a.companyId}/issues`;
+    const listed = await request(agentApp).get(path).query({ includeParticipatedTasks: "true" }).expect(403);
+    const counted = await request(agentApp).get(`${path}/count`).query({ includeParticipatedTasks: "true" }).expect(403);
+    expect(counted.body).toEqual(listed.body);
+  });
 });
