@@ -1876,6 +1876,10 @@ export interface IssueFilters {
    */
   assigneeAgentId?: string | null;
   participantAgentId?: string;
+  issueIds?: string[];
+  listProjection?: "index" | "rows";
+  parentIds?: string[];
+  oneChildPerParent?: boolean;
   assigneeUserId?: string;
   touchedByUserId?: string;
   inboxArchivedByUserId?: string;
@@ -6739,7 +6743,10 @@ async function prepareIssueListQuery(db: Db, companyId: string, filters?: IssueF
     eq(issues.companyId, companyId),
     visibleIssueCondition(),
   ];
-  if (!filters?.q?.trim()) {
+  // Empty id sets match nothing: inArray renders `false` for [].
+  if (filters?.issueIds) conditions.push(inArray(issues.id, filters.issueIds));
+  if (filters?.parentIds) conditions.push(inArray(issues.parentId, filters.parentIds));
+  if (!filters?.q?.trim() && !filters?.issueIds) {
     conditions.push(isNull(issues.conversationAgentId));
     if (!filters?.touchedByUserId && !filters?.unreadForUserId && !filters?.inboxArchivedByUserId) {
       conditions.push(nonIdleSlackIssueCondition());
@@ -8201,6 +8208,32 @@ export function issueService(db: Db) {
     clearCheckoutRunIfTerminal,
     addStopRelayCommentIfNeeded,
 
+    unreadInboxIssueIds: async (companyId: string, userId: string, readCondition: SQL<boolean>) => {
+      // Rank the visible Mine set before counting unread, just like the inbox.
+      // This projection never reads descriptions, run payloads, or recovery details.
+      const rows = await db.select({
+        id: issues.id,
+      }).from(issues).where(and(
+        eq(issues.companyId, companyId),
+        visibleIssueCondition(),
+        isNull(issues.conversationAgentId),
+        nonPluginOperationIssueCondition(),
+        ne(issues.status, "cancelled"),
+        touchedByUserCondition(companyId, userId),
+        inboxVisibleForUserCondition(companyId, userId),
+        readCondition,
+      )).orderBy(desc(issueCanonicalLastActivityAtExpr(companyId)), desc(issues.updatedAt), desc(issues.id)).limit(100);
+      if (rows.length === 0) return [];
+      // Keep correlated predicates in WHERE (as in the list's user stats).
+      // A single-table Drizzle SELECT projection unqualifies nested columns.
+      return db.select({ id: issues.id }).from(issues).where(and(
+        eq(issues.companyId, companyId),
+        inArray(issues.id, rows.map((row) => row.id)),
+        unreadForUserCondition(companyId, userId),
+        readCondition,
+      )).then((unread) => unread.map((row) => row.id));
+    },
+
     list: async (companyId: string, filters?: IssueFilters) => {
       if (filters?.sortField === "id" && filters.attention) {
         throw unprocessable("ID ordering is not supported for blocked attention lists");
@@ -8222,7 +8255,14 @@ export function issueService(db: Db) {
       const { conditions, limit, offset, contextUserId, includeBlockedBy, includeBlockedInboxAttention, includeLiveDescendantSummary, hasSearch, taskSearch } = await prepareIssueListQuery(db, companyId, filters);
       const priorityOrder = sql`CASE ${issues.priority} WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`;
       const searchOrder = sql<number>`-task_search.score`;
-      const issueSource = db.select(issueListSelect).from(issues);
+      const selectedFields = filters?.listProjection ? {
+        ...issueListSelect,
+        description: sql<string | null>`NULL`,
+        descriptionTruncated: sql<boolean>`false`,
+      } : issueListSelect;
+      const issueSource = (filters?.oneChildPerParent
+        ? db.selectDistinctOn([issues.parentId], selectedFields)
+        : db.select(selectedFields)).from(issues);
       const searchedSource = hasSearch
         ? issueSource.innerJoin(sql`(
             ${taskSearchCtes(companyId, taskSearch, true, and(...conditions), filters?.readCondition)}
@@ -8232,6 +8272,7 @@ export function issueService(db: Db) {
       const baseQuery = searchedSource
         .where(and(...conditions))
         .orderBy(
+          ...(filters?.oneChildPerParent ? [asc(issues.parentId)] : []),
           ...issueListOrderBy(companyId, {
             hasSearch,
             priorityOrder,
@@ -8256,7 +8297,7 @@ export function issueService(db: Db) {
         ),
       }));
       const withLabels = await withIssueLabels(db, rows);
-      const runMap = await activeRunMapForIssues(db, withLabels);
+      const runMap = filters?.listProjection === "index" ? new Map() : await activeRunMapForIssues(db, withLabels);
       const withRuns = withActiveRuns(withLabels, runMap);
       if (withRuns.length === 0) {
         return withRuns;
@@ -8302,8 +8343,8 @@ export function issueService(db: Db) {
         reviewAttentionByIssueId,
         blockedInboxAttentionByIssueId,
       ] = await Promise.all([
-        listIssueBlockerAttentionMap(db, companyId, withRuns),
-        listIssueReviewAttentionMap(db, companyId, withRuns),
+        filters?.listProjection === "index" ? Promise.resolve(new Map<string, IssueBlockerAttention>()) : listIssueBlockerAttentionMap(db, companyId, withRuns),
+        filters?.listProjection === "index" ? Promise.resolve(new Map<string, IssueReviewAttention>()) : listIssueReviewAttentionMap(db, companyId, withRuns),
         includeBlockedInboxAttention
           ? listIssueBlockedInboxAttentionMap(db, companyId, withRuns)
           : Promise.resolve(new Map<string, IssueBlockedInboxAttention>()),
