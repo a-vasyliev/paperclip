@@ -19,6 +19,7 @@ import { DELIVERY_QUEUES, notifyDeliveryWork } from "./delivery-work-notificatio
 import { knownRunCostCents } from "./budget-exposure.js";
 import { createLiveRunUsageProjection, liveRunUsageCostCents } from "./budget-live-usage.js";
 import { budgetServiceInTransaction } from "./budgets.js";
+import { createHeartbeatRunState, normalizeAdapterRunUsage, normalizeUsageTotals } from "./heartbeat/run-state.js";
 
 const token = z.number().int().nonnegative().max(2_147_483_647);
 const price = z.number().finite().nonnegative().nullable().optional();
@@ -232,7 +233,7 @@ export async function createRunUsageRecorder(db: Db, input: { companyId: string;
   await syncDirectory(directory);
   await recoverPendingRunUsageReceipts(db, input, directory);
   const bound = await db.update(heartbeatRuns).set({ usageJson: sql`coalesce(${heartbeatRuns.usageJson}, '{}'::jsonb) || ${JSON.stringify({ accountingReceiptSourceId: sourceId, accountingReceiptSequence: 0, accountingReceiptReady: false })}::jsonb` })
-    .where(and(eq(heartbeatRuns.id, input.runId), eq(heartbeatRuns.companyId, input.companyId), isNull(heartbeatRuns.costAccountedAt))).returning({ id: heartbeatRuns.id, runtimeMode: heartbeatRuns.runtimeMode, usageJson: heartbeatRuns.usageJson });
+    .where(and(eq(heartbeatRuns.id, input.runId), eq(heartbeatRuns.companyId, input.companyId), isNull(heartbeatRuns.costAccountedAt))).returning({ id: heartbeatRuns.id, runtimeMode: heartbeatRuns.runtimeMode, usageJson: heartbeatRuns.usageJson, agentId: heartbeatRuns.agentId, sessionIdBefore: heartbeatRuns.sessionIdBefore });
   if (bound.length !== 1) throw conflict("Run cannot accept a new usage recorder");
   let sequence = 0;
   let currentAttempt = "default";
@@ -254,6 +255,15 @@ export async function createRunUsageRecorder(db: Db, input: { companyId: string;
     }
   }
   const projectLiveUsage = createLiveRunUsageProjection(initialLiveUsage);
+  const readSessionBaseline = () => createHeartbeatRunState(db).resolveNormalizedUsageForSession({
+    agentId: bound[0].agentId, runId: input.runId, sessionId: bound[0].sessionIdBefore,
+    rawUsage: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 }, usageBasis: "session_cumulative",
+  }).then(resolution => resolution.previousRawUsage, error => {
+    sessionBaseline = undefined;
+    logger.warn({ err: error, runId: input.runId }, "Session usage baseline unavailable; receipt keeps cumulative totals until completion");
+    return undefined;
+  });
+  let sessionBaseline: Promise<ReturnType<typeof normalizeUsageTotals> | undefined> | undefined;
   let chain = Promise.resolve();
   let captureFailed = bound[0].usageJson?.accountingCaptureFailed === true;
   let finishFailedCapture: (() => void) | undefined;
@@ -332,7 +342,12 @@ export async function createRunUsageRecorder(db: Db, input: { companyId: string;
       // can be considered complete, even if a later attempt succeeded.
       receipt.complete = !captureFailed && parts.every(part => part.complete);
     }
-    const envelope: UsageReceiptEnvelope = { schema: "paperclip/accounting-receipt/v1", id: randomUUID(), ...input, sourceId, sequence: ++sequence, receivedAt: new Date().toISOString(), receipt, liveCostCents };
+    const baseline = receipt.usageBasis === "session_cumulative" ? await (sessionBaseline ??= readSessionBaseline()) : undefined;
+    const journaled = baseline === undefined ? receipt : priceAnthropicReceipt(priceCodexReceipt({ ...receipt, usageBasis: "per_run",
+      usage: normalizeAdapterRunUsage(normalizeUsageTotals(receipt.usage), baseline, "session_cumulative") ?? undefined,
+      costUsd: null, costUsdExact: null, cacheAdjustedCostUsd: null, usageByModel: undefined }));
+    const envelope: UsageReceiptEnvelope = { schema: "paperclip/accounting-receipt/v1", id: randomUUID(), ...input, sourceId, sequence: ++sequence, receivedAt: new Date().toISOString(),
+      receipt: journaled, liveCostCents: journaled === receipt ? liveCostCents : liveRunUsageCostCents(journaled) };
     const file = await spoolUsageReceipt(envelope, directory);
     try { await persistUsageReceipt(db, envelope); await fs.rm(file, { force: true }); }
     catch (error) {
